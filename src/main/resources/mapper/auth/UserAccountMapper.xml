@@ -1,0 +1,82 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.auth.persistence.UserAccountMapper">
+
+    <resultMap id="userAccountMap"
+               type="xyz.v185v.collegeassistant.auth.persistence.UserAccountDO">
+        <id property="id" column="id"/>
+        <result property="username" column="username"/>
+        <result property="passwordHash" column="password_hash"/>
+        <result property="displayName" column="display_name"/>
+        <result property="role" column="role"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="enabled" column="enabled"/>
+        <result property="tokenVersion" column="token_version"/>
+    </resultMap>
+
+    <sql id="baseColumns">
+        id, username, password_hash, display_name, role, created_at,
+        enabled, token_version
+    </sql>
+
+    <select id="lockAdminRoleState" resultType="string">
+        SELECT pg_advisory_xact_lock(hashtextextended('admin-role-state', 0))
+    </select>
+
+    <select id="lockById" resultMap="userAccountMap">
+        SELECT <include refid="baseColumns"/>
+        FROM users
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <select id="updateRoleAndIncrementTokenVersion"
+            resultMap="userAccountMap" affectData="true" flushCache="true">
+        UPDATE users
+        SET role = #{role},
+            token_version = token_version + 1
+        WHERE id = #{id}
+        RETURNING <include refid="baseColumns"/>
+    </select>
+
+    <select id="updateEnabledAndIncrementTokenVersion"
+            resultMap="userAccountMap" affectData="true" flushCache="true">
+        UPDATE users
+        SET enabled = #{enabled},
+            token_version = token_version + 1
+        WHERE id = #{id}
+        RETURNING <include refid="baseColumns"/>
+    </select>
+
+    <select id="incrementTokenVersion"
+            resultMap="userAccountMap" affectData="true" flushCache="true">
+        UPDATE users
+        SET token_version = token_version + 1
+        WHERE id = #{id}
+        RETURNING <include refid="baseColumns"/>
+    </select>
+
+    <insert id="bootstrapAdmin">
+        INSERT INTO users (
+            username, password_hash, display_name, role, enabled
+        )
+        VALUES (
+            #{username}, #{passwordHash}, #{username}, 'ADMIN', TRUE
+        )
+        ON CONFLICT (username) DO UPDATE
+        SET password_hash = EXCLUDED.password_hash,
+            role = 'ADMIN',
+            enabled = TRUE,
+            token_version = users.token_version + 1
+    </insert>
+
+    <select id="insertReturning"
+            resultMap="userAccountMap" affectData="true" flushCache="true">
+        INSERT INTO users (username, password_hash, display_name, role)
+        VALUES (#{username}, #{passwordHash}, #{displayName}, #{role})
+        RETURNING <include refid="baseColumns"/>
+    </select>
+
+</mapper>

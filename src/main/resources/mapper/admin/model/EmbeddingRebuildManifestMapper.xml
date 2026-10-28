@@ -1,0 +1,71 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.admin.model.persistence.EmbeddingRebuildManifestMapper">
+
+    <resultMap id="manifestItemMap"
+               type="xyz.v185v.collegeassistant.admin.model.persistence.EmbeddingRebuildManifestItemDO">
+        <id property="jobId" column="job_id"/>
+        <id property="targetType" column="target_type"/>
+        <id property="targetId" column="target_id"/>
+        <result property="contentVersion" column="content_version"/>
+        <result property="chunkCount" column="chunk_count"/>
+        <result property="chunkTextChecksum" column="chunk_text_checksum"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="baseColumns">
+        job_id, target_type, target_id, content_version,
+        chunk_count, chunk_text_checksum, created_at, updated_at
+    </sql>
+
+    <insert id="insertBatch">
+        INSERT INTO embedding_rebuild_manifest_item (
+            job_id, target_type, target_id, content_version,
+            chunk_count, chunk_text_checksum
+        )
+        VALUES
+        <foreach collection="items" item="item" separator=",">
+            (
+                #{jobId}, #{item.targetType}, #{item.targetId}, #{item.contentVersion},
+                NULL, #{item.chunkTextChecksum, jdbcType=VARCHAR}
+            )
+        </foreach>
+    </insert>
+
+    <select id="findByJobId" resultMap="manifestItemMap">
+        SELECT
+            <include refid="baseColumns"/>
+        FROM embedding_rebuild_manifest_item
+        WHERE job_id = #{jobId}
+        ORDER BY target_type, target_id
+    </select>
+
+    <update id="markCompleted">
+        UPDATE embedding_rebuild_manifest_item
+        SET chunk_count = #{chunkCount},
+            chunk_text_checksum = #{checksum},
+            updated_at = now()
+        WHERE job_id = #{jobId}
+          AND target_type = #{targetType}
+          AND target_id = #{targetId}
+          AND chunk_count IS NULL
+          AND chunk_text_checksum IS NULL
+    </update>
+
+    <select id="countItems" resultType="long">
+        SELECT count(*)
+        FROM embedding_rebuild_manifest_item
+        WHERE job_id = #{jobId}
+    </select>
+
+    <select id="countIncomplete" resultType="long">
+        SELECT count(*)
+        FROM embedding_rebuild_manifest_item
+        WHERE job_id = #{jobId}
+          AND chunk_count IS NULL
+    </select>
+
+</mapper>

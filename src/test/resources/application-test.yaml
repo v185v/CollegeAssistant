@@ -1,0 +1,11 @@
+spring:
+  flyway:
+    enabled: false
+  autoconfigure:
+    exclude:
+      - org.springframework.boot.jdbc.autoconfigure.DataSourceAutoConfiguration
+      - org.springframework.boot.flyway.autoconfigure.FlywayAutoConfiguration
+
+app:
+  jwt:
+    secret: test-profile-jwt-secret-7a4d21f8c9630b5e

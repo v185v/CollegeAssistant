@@ -1,0 +1,16 @@
+spring:
+  datasource:
+    url: ${TEST_DB_URL}
+    username: ${TEST_DB_USERNAME}
+    password: ${TEST_DB_PASSWORD}
+  flyway:
+    enabled: true
+
+app:
+  admin:
+    jobs:
+      scheduling-enabled: false
+  ingestion:
+    scheduling-enabled: false
+  jwt:
+    secret: test-db-profile-jwt-secret-91c6e4a27b305fd8

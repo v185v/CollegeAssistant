@@ -1,0 +1,172 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.chat.persistence.ChatMapper">
+
+    <resultMap id="message" type="xyz.v185v.collegeassistant.chat.persistence.ChatMessageDO">
+        <id property="id" column="id"/>
+        <result property="sessionId" column="session_id"/>
+        <result property="role" column="role"/>
+        <result property="content" column="content"/>
+        <result property="sourcesJson" column="sources"
+                typeHandler="xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <select id="createSession" resultType="long" affectData="true" flushCache="true">
+        INSERT INTO chat_session (user_id, title)
+        VALUES (#{userId}, #{title})
+        RETURNING id
+    </select>
+
+    <select id="appendOwnedMessage" resultMap="message"
+            affectData="true" flushCache="true">
+        WITH inserted AS (
+            INSERT INTO chat_message (session_id, role, content, sources)
+            SELECT s.id, #{role}, #{content}, CAST(#{sources} AS jsonb)
+            FROM chat_session s
+            WHERE s.id = #{sessionId}
+              AND s.user_id = #{userId}
+            RETURNING id, session_id, role, content, sources, created_at
+        ), touched AS (
+            UPDATE chat_session s
+            SET updated_at = GREATEST(s.updated_at, clock_timestamp())
+            FROM inserted i
+            WHERE s.id = i.session_id
+            RETURNING s.id
+        )
+        SELECT i.id, i.session_id, i.role, i.content, i.sources, i.created_at
+        FROM inserted i
+        JOIN touched t ON t.id = i.session_id
+    </select>
+
+    <select id="reserveAssistantPlaceholder" resultType="long"
+            affectData="true" flushCache="true">
+        INSERT INTO chat_message (session_id, role, content, sources)
+        SELECT s.id, 'ASSISTANT', '', '[]'::jsonb
+        FROM chat_session s
+        WHERE s.id = #{sessionId}
+          AND s.user_id = #{userId}
+        RETURNING id
+    </select>
+
+    <select id="finalizeAssistantPlaceholder" resultMap="message"
+            affectData="true" flushCache="true">
+        WITH finalized AS (
+            UPDATE chat_message m
+            SET content = #{content},
+                sources = CAST(#{sources} AS jsonb)
+            FROM chat_session s
+            WHERE m.id = #{messageId}
+              AND m.session_id = #{sessionId}
+              AND s.id = m.session_id
+              AND s.user_id = #{userId}
+              AND m.role = 'ASSISTANT'
+              AND m.content = ''
+            RETURNING m.id, m.session_id, m.role, m.content,
+                      m.sources, m.created_at
+        ), touched AS (
+            UPDATE chat_session s
+            SET updated_at = GREATEST(s.updated_at, clock_timestamp())
+            FROM finalized f
+            WHERE s.id = f.session_id
+            RETURNING s.id
+        )
+        SELECT f.id, f.session_id, f.role, f.content, f.sources, f.created_at
+        FROM finalized f
+        JOIN touched t ON t.id = f.session_id
+    </select>
+
+    <select id="discardAssistantPlaceholder" resultType="boolean"
+            affectData="true" flushCache="true">
+        WITH deleted AS (
+            DELETE FROM chat_message m
+            USING chat_session s
+            WHERE m.id = #{messageId}
+              AND m.session_id = #{sessionId}
+              AND s.id = m.session_id
+              AND s.user_id = #{userId}
+              AND m.role = 'ASSISTANT'
+              AND m.content = ''
+            RETURNING m.id
+        )
+        SELECT EXISTS(SELECT 1 FROM deleted)
+    </select>
+
+    <select id="deleteStaleAssistantPlaceholders" resultType="int"
+            affectData="true" flushCache="true">
+        WITH stale AS (
+            SELECT m.id
+            FROM chat_message m
+            WHERE m.role = 'ASSISTANT'
+              AND m.content = ''
+              AND m.created_at &lt; #{cutoff}
+            ORDER BY m.created_at ASC, m.id ASC
+            LIMIT #{batchSize}
+            FOR UPDATE SKIP LOCKED
+        ), deleted AS (
+            DELETE FROM chat_message m
+            USING stale
+            WHERE m.id = stale.id
+            RETURNING m.id
+        )
+        SELECT count(*)
+        FROM deleted
+    </select>
+
+    <select id="findOwnedSessions"
+            resultType="xyz.v185v.collegeassistant.chat.persistence.ChatSessionRow">
+        SELECT s.id, s.title, s.created_at, s.updated_at,
+               last_message.content AS last_message
+        FROM chat_session s
+        LEFT JOIN LATERAL (
+            SELECT m.content
+            FROM chat_message m
+            WHERE m.session_id = s.id
+              AND NOT (m.role = 'ASSISTANT' AND m.content = '')
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT 1
+        ) last_message ON true
+        WHERE s.user_id = #{userId}
+        ORDER BY s.updated_at DESC, s.id DESC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+
+    <select id="findOwnedMemory" resultMap="message">
+        SELECT recent.role, recent.content
+        FROM (
+            SELECT m.role, m.content, m.created_at, m.id
+            FROM chat_message m
+            JOIN chat_session s ON s.id = m.session_id
+            WHERE m.session_id = #{sessionId}
+              AND s.user_id = #{userId}
+              AND NOT (m.role = 'ASSISTANT' AND m.content = '')
+            ORDER BY m.created_at DESC, m.id DESC
+            LIMIT #{limit}
+        ) recent
+        ORDER BY recent.created_at ASC, recent.id ASC
+    </select>
+
+    <select id="findOwnedDetailMessages" resultMap="message">
+        SELECT m.id, m.session_id, m.role, m.content, m.sources, m.created_at
+        FROM chat_message m
+        JOIN chat_session s ON s.id = m.session_id
+        WHERE m.session_id = #{sessionId}
+          AND s.user_id = #{userId}
+          AND NOT (m.role = 'ASSISTANT' AND m.content = '')
+        ORDER BY m.created_at DESC, m.id DESC
+        LIMIT #{fetchLimit}
+    </select>
+
+    <select id="findOwnedCompletedAssistant" resultMap="message">
+        SELECT m.id, m.session_id, m.role, m.content, m.sources, m.created_at
+        FROM chat_message m
+        JOIN chat_session s ON s.id = m.session_id
+        WHERE m.id = #{messageId}
+          AND m.session_id = #{sessionId}
+          AND s.user_id = #{userId}
+          AND m.role = 'ASSISTANT'
+          AND m.content &lt;&gt; ''
+    </select>
+</mapper>

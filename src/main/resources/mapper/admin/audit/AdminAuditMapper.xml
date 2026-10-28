@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.admin.audit.persistence.AdminAuditMapper">
+
+    <resultMap id="adminAuditLogMap"
+               type="xyz.v185v.collegeassistant.admin.audit.persistence.AdminAuditLogDO">
+        <id property="id" column="id"/>
+        <result property="actorId" column="actor_id"/>
+        <result property="action" column="action"/>
+        <result property="targetType" column="target_type"/>
+        <result property="targetId" column="target_id"/>
+        <result property="summaryJson" column="summary_json"/>
+        <result property="remoteAddress" column="remote_address"/>
+        <result property="result" column="result"/>
+        <result property="errorCode" column="error_code"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <sql id="filterPredicate">
+        <where>
+            <if test="filter.actorId != null">
+                actor_id = #{filter.actorId}
+            </if>
+            <if test="filter.action != null">
+                AND action = #{filter.action}
+            </if>
+            <if test="filter.targetType != null">
+                AND target_type = #{filter.targetType}
+            </if>
+            <if test="filter.targetId != null">
+                AND target_id = #{filter.targetId}
+            </if>
+            <if test="filter.result != null">
+                AND result = #{filter.result}
+            </if>
+            <if test="filter.createdFrom != null">
+                AND created_at &gt;= #{filter.createdFrom, jdbcType=TIMESTAMP_WITH_TIMEZONE}
+            </if>
+            <if test="filter.createdTo != null">
+                AND created_at &lt;= #{filter.createdTo, jdbcType=TIMESTAMP_WITH_TIMEZONE}
+            </if>
+        </where>
+    </sql>
+
+    <insert id="insertEvent">
+        INSERT INTO admin_audit_log (
+            actor_id, action, target_type, target_id, summary,
+            remote_address, result, error_code
+        )
+        VALUES (
+            #{row.actorId, jdbcType=BIGINT},
+            #{row.action},
+            #{row.targetType},
+            #{row.targetId, jdbcType=BIGINT},
+            #{row.summaryJson,
+                typeHandler=xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler},
+            CAST(#{row.remoteAddress, jdbcType=VARCHAR} AS inet),
+            #{row.result},
+            #{row.errorCode, jdbcType=INTEGER}
+        )
+    </insert>
+
+    <select id="find" resultMap="adminAuditLogMap">
+        SELECT id, actor_id, action, target_type, target_id,
+               summary::text AS summary_json,
+               remote_address::text AS remote_address,
+               result, error_code, created_at
+        FROM admin_audit_log
+        <include refid="filterPredicate"/>
+        ORDER BY created_at DESC, id DESC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+
+</mapper>

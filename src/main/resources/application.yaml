@@ -1,0 +1,113 @@
+spring:
+  application:
+    name: CollegeAssistant
+  datasource:
+    url: ${DB_URL:jdbc:postgresql://localhost:55432/college}
+    username: ${DB_USERNAME:college}
+    password: ${DB_PASSWORD:}
+  flyway:
+    enabled: true
+  servlet:
+    multipart:
+      max-file-size: ${IMPORT_MAX_FILE_SIZE:20MB}
+      max-request-size: ${IMPORT_MAX_REQUEST_SIZE:101MB}
+
+mybatis-plus:
+  mapper-locations: classpath*:/mapper/**/*.xml
+  configuration:
+    map-underscore-to-camel-case: true
+    cache-enabled: false
+    local-cache-scope: STATEMENT
+  global-config:
+    banner: false
+    db-config:
+      id-type: AUTO
+
+app:
+  admin-bootstrap:
+    username: ${ADMIN_BOOTSTRAP_USERNAME:}
+    password: ${ADMIN_BOOTSTRAP_PASSWORD:}
+  admin:
+    jobs:
+      scheduling-enabled: ${ADMIN_JOBS_SCHEDULING_ENABLED:true}
+      worker-id: ${ADMIN_JOBS_WORKER_ID:}
+      claim-batch-size: ${ADMIN_JOBS_CLAIM_BATCH_SIZE:8}
+      lease-timeout: ${ADMIN_JOBS_LEASE_TIMEOUT:PT1H}
+      poll-interval: ${ADMIN_JOBS_POLL_INTERVAL:PT5S}
+      heartbeat-interval: ${ADMIN_JOBS_HEARTBEAT_INTERVAL:PT15S}
+      executor-core-size: ${ADMIN_JOBS_EXECUTOR_CORE_SIZE:1}
+      executor-max-size: ${ADMIN_JOBS_EXECUTOR_MAX_SIZE:2}
+      executor-queue-capacity: ${ADMIN_JOBS_EXECUTOR_QUEUE_CAPACITY:32}
+  ingestion:
+    scheduling-enabled: ${INGEST_SCHEDULING_ENABLED:true}
+    scheduler-worker-id: ${INGEST_SCHEDULER_WORKER_ID:}
+    scheduler-claim-batch-size: ${INGEST_SCHEDULER_CLAIM_BATCH_SIZE:8}
+    scheduler-lease-timeout: ${INGEST_SCHEDULER_LEASE_TIMEOUT:PT1H}
+    scheduler-poll: ${INGEST_SCHEDULER_POLL:PT30S}
+    deferred-worker-id: ${INGEST_DEFERRED_WORKER_ID:}
+    deferred-claim-batch-size: ${INGEST_DEFERRED_CLAIM_BATCH_SIZE:8}
+    deferred-poll: ${INGEST_DEFERRED_POLL:PT30S}
+    lease-heartbeat-interval: ${INGEST_LEASE_HEARTBEAT_INTERVAL:PT15S}
+    parser-timeout: ${INGEST_PARSER_TIMEOUT:PT30S}
+    import-staging-retention: ${IMPORT_STAGING_RETENTION:P7D}
+    import-staging-clean-interval: ${IMPORT_STAGING_CLEAN_INTERVAL:PT1H}
+    private-origin-allowlist: ${INGEST_PRIVATE_ORIGIN_ALLOWLIST:}
+    same-origin-delay: ${INGEST_SAME_ORIGIN_DELAY:PT0.5S}
+    max-retry-after: ${INGEST_MAX_RETRY_AFTER:PT1H}
+    global-concurrency: ${INGEST_GLOBAL_CONCURRENCY:8}
+    max-redirects: ${INGEST_MAX_REDIRECTS:5}
+  auth:
+    rate-limit:
+      login-ip-max-requests: ${AUTH_RATE_LIMIT_LOGIN_IP_MAX_REQUESTS:30}
+      login-ip-window: ${AUTH_RATE_LIMIT_LOGIN_IP_WINDOW:PT1M}
+      login-failure-max-requests: ${AUTH_RATE_LIMIT_LOGIN_FAILURE_MAX_REQUESTS:5}
+      login-failure-window: ${AUTH_RATE_LIMIT_LOGIN_FAILURE_WINDOW:PT5M}
+      register-ip-max-requests: ${AUTH_RATE_LIMIT_REGISTER_IP_MAX_REQUESTS:5}
+      register-ip-window: ${AUTH_RATE_LIMIT_REGISTER_IP_WINDOW:PT1H}
+      max-tracked-keys: ${AUTH_RATE_LIMIT_MAX_TRACKED_KEYS:10000}
+  jwt:
+    secret: ${JWT_SECRET}
+    expires-in-seconds: ${JWT_EXPIRES_IN_SECONDS:7200}
+  storage:
+    local-root: ${LOCAL_STORAGE_ROOT:./data/files}
+  backup:
+    root: ${BACKUP_ROOT:./data/backups}
+    pg-dump: ${PG_DUMP_PATH:pg_dump}
+    pg-restore: ${PG_RESTORE_PATH:pg_restore}
+    host: ${BACKUP_DB_HOST:localhost}
+    port: ${BACKUP_DB_PORT:55432}
+    database-name: ${BACKUP_DB_NAME:college}
+    username: ${BACKUP_DB_USERNAME:college}
+    password: ${BACKUP_DB_PASSWORD:${DB_PASSWORD:}}
+    dump-timeout: ${BACKUP_DUMP_TIMEOUT:PT30M}
+    validation-timeout: ${BACKUP_VALIDATION_TIMEOUT:PT5M}
+    kill-grace: ${BACKUP_KILL_GRACE:PT5S}
+    output-limit-bytes: ${BACKUP_OUTPUT_LIMIT_BYTES:1048576}
+    min-free-bytes: ${BACKUP_MIN_FREE_BYTES:1073741824}
+    total-quota-bytes: ${BACKUP_TOTAL_QUOTA_BYTES:10737418240}
+    default-retention-days: ${BACKUP_RETENTION_DAYS:7}
+    retention-interval: ${BACKUP_RETENTION_INTERVAL:PT1H}
+  ai:
+    config-encryption-key: ${ADMIN_CONFIG_ENCRYPTION_KEY:}
+    model-host-allowlist: ${AI_MODEL_HOST_ALLOWLIST:http://localhost:11434}
+    connect-timeout: ${AI_MODEL_CONNECT_TIMEOUT:PT3S}
+    request-timeout: ${AI_MODEL_REQUEST_TIMEOUT:PT10S}
+  rag:
+    min-similarity: ${RAG_MIN_SIMILARITY:0.35}
+  chat:
+    memory-message-limit: ${CHAT_MEMORY_MESSAGE_LIMIT:8}
+    detail-message-limit: ${CHAT_DETAIL_MESSAGE_LIMIT:200}
+
+ai:
+  chat:
+    provider: ${AI_CHAT_PROVIDER:ollama}
+    model: ${AI_CHAT_MODEL:}
+    base-url: ${AI_CHAT_BASE_URL:}
+    api-key: ${AI_CHAT_API_KEY:}
+    temperature: ${AI_CHAT_TEMPERATURE:0.7}
+  embedding:
+    provider: ${AI_EMBEDDING_PROVIDER:ollama}
+    model: ${AI_EMBEDDING_MODEL:}
+    base-url: ${AI_EMBEDDING_BASE_URL:}
+    api-key: ${AI_EMBEDDING_API_KEY:}
+    dimension: ${AI_EMBEDDING_DIMENSION:1536}

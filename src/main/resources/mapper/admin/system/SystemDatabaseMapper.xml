@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.admin.system.persistence.SystemDatabaseMapper">
+
+    <resultMap id="documentObjectMap"
+               type="xyz.v185v.collegeassistant.admin.system.persistence.SystemDatabaseMapper$DocumentObjectRow">
+        <constructor>
+            <idArg column="id" javaType="java.lang.Long"/>
+            <arg column="file_object_key" javaType="string"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="vectorReferenceMap"
+               type="xyz.v185v.collegeassistant.admin.system.persistence.SystemDatabaseMapper$VectorReferenceRow">
+        <constructor>
+            <arg column="doc_ref_type" javaType="string"/>
+            <arg column="doc_ref_id" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="tableCountsMap"
+               type="xyz.v185v.collegeassistant.admin.system.persistence.SystemDatabaseMapper$TableCountsRow">
+        <constructor>
+            <arg column="users_count" javaType="java.lang.Long"/>
+            <arg column="source_count" javaType="java.lang.Long"/>
+            <arg column="document_count" javaType="java.lang.Long"/>
+            <arg column="embedding_chunk_count" javaType="java.lang.Long"/>
+            <arg column="ingest_run_count" javaType="java.lang.Long"/>
+            <arg column="ugc_post_count" javaType="java.lang.Long"/>
+            <arg column="admin_job_count" javaType="java.lang.Long"/>
+            <arg column="admin_audit_log_count" javaType="java.lang.Long"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="recentIngestionFailureMap"
+               type="xyz.v185v.collegeassistant.admin.system.persistence.SystemDatabaseMapper$RecentIngestionFailureRow">
+        <constructor>
+            <idArg column="id" javaType="java.lang.Long"/>
+            <arg column="source_id" javaType="java.lang.Long"/>
+            <arg column="status" javaType="string"/>
+            <arg column="error_code" javaType="string"/>
+            <arg column="finished_at" javaType="java.time.OffsetDateTime"/>
+        </constructor>
+    </resultMap>
+
+    <select id="flywayVersion" resultType="string">
+        SELECT version
+        FROM flyway_schema_history
+        WHERE success = true
+          AND version IS NOT NULL
+        ORDER BY installed_rank DESC
+        LIMIT 1
+    </select>
+
+    <select id="indexSizeBytes" resultType="long">
+        SELECT COALESCE(sum(pg_relation_size(indexrelid)), 0)
+        FROM pg_stat_user_indexes
+    </select>
+
+    <select id="tableCounts" resultMap="tableCountsMap">
+        SELECT
+            (SELECT count(*) FROM users) AS users_count,
+            (SELECT count(*) FROM source) AS source_count,
+            (SELECT count(*) FROM document) AS document_count,
+            (SELECT count(*) FROM embedding_chunk) AS embedding_chunk_count,
+            (SELECT count(*) FROM ingest_run) AS ingest_run_count,
+            (SELECT count(*) FROM ugc_post) AS ugc_post_count,
+            (SELECT count(*) FROM admin_job) AS admin_job_count,
+            (SELECT count(*) FROM admin_audit_log) AS admin_audit_log_count
+    </select>
+
+    <select id="activeConnections" resultType="int">
+        SELECT count(*)
+        FROM pg_stat_activity
+        WHERE datname = current_database()
+          AND state = 'active'
+    </select>
+
+    <select id="recentIngestionFailures" resultMap="recentIngestionFailureMap">
+        SELECT id, source_id, status, error_code, finished_at
+        FROM ingest_run
+        WHERE status IN ('FAILED', 'PARTIAL_SUCCESS')
+        ORDER BY COALESCE(finished_at, started_at) DESC, id DESC
+        LIMIT 10
+    </select>
+
+    <select id="documentsMissingObjects" resultMap="documentObjectMap">
+        SELECT id, file_object_key
+        FROM document
+        WHERE document_status = 'ACTIVE'
+          AND file_object_key IS NOT NULL
+          AND btrim(file_object_key) &lt;&gt; ''
+        ORDER BY id
+    </select>
+
+    <select id="activeDocumentsMissingVectors" resultType="long">
+        SELECT d.id
+        FROM document d
+        WHERE d.document_status = 'ACTIVE'
+          AND NOT EXISTS (
+              SELECT 1
+              FROM embedding_chunk ec
+              WHERE ec.doc_ref_type = 'DOCUMENT'
+                AND ec.doc_ref_id = d.id
+          )
+        ORDER BY d.id
+    </select>
+
+    <select id="orphanVectorReferences" resultMap="vectorReferenceMap">
+        SELECT DISTINCT ec.doc_ref_type, ec.doc_ref_id
+        FROM embedding_chunk ec
+        WHERE (
+            ec.doc_ref_type = 'DOCUMENT'
+            AND NOT EXISTS (
+                SELECT 1 FROM document d WHERE d.id = ec.doc_ref_id
+            )
+        ) OR (
+            ec.doc_ref_type = 'UGC'
+            AND NOT EXISTS (
+                SELECT 1 FROM ugc_post p WHERE p.id = ec.doc_ref_id
+            )
+        )
+        ORDER BY ec.doc_ref_type, ec.doc_ref_id
+    </select>
+
+    <select id="referencedObjectKeys" resultType="string">
+        SELECT file_object_key
+        FROM document
+        WHERE file_object_key IS NOT NULL
+          AND btrim(file_object_key) &lt;&gt; ''
+    </select>
+
+    <select id="staleIngestRuns" resultType="long">
+        SELECT id
+        FROM ingest_run
+        WHERE status = 'RUNNING'
+          AND heartbeat_at &lt; now() - CAST(#{timeout,jdbcType=VARCHAR} AS interval)
+        ORDER BY id
+    </select>
+
+    <select id="ingestItemExists" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1
+            FROM ingest_run_item
+            WHERE run_id = #{runId}
+              AND id = #{itemId}
+        )
+    </select>
+
+</mapper>

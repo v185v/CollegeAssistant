@@ -1,0 +1,23 @@
+[
+  {
+    "name": "official_policy_requires_source",
+    "question": "绩点如何计算？",
+    "expectedIntent": "OFFICIAL",
+    "mustHaveSourceType": "OFFICIAL",
+    "expectedAnswerStatus": "ANSWERED"
+  },
+  {
+    "name": "experience_question_prefers_ugc",
+    "question": "哪个老师微积分好拿分？",
+    "expectedIntent": "EXPERIENTIAL",
+    "mustHaveSourceType": "UGC",
+    "expectedAnswerStatus": "ANSWERED"
+  },
+  {
+    "name": "unknown_question_no_evidence",
+    "question": "火星校区奖学金怎么申请？",
+    "expectedIntent": "UNKNOWN",
+    "mustHaveSourceType": null,
+    "expectedAnswerStatus": "NO_EVIDENCE"
+  }
+]

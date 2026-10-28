@@ -1,0 +1,205 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.document.persistence.DocumentMapper">
+
+    <resultMap id="documentMap"
+               type="xyz.v185v.collegeassistant.document.persistence.DocumentDO">
+        <id property="id" column="id"/>
+        <result property="sourceId" column="source_id"/>
+        <result property="title" column="title"/>
+        <result property="sourceUrl" column="source_url"/>
+        <result property="sourceOrg" column="source_org"/>
+        <result property="publishedAt" column="published_at"/>
+        <result property="contentHash" column="content_hash"/>
+        <result property="fileObjectKey" column="file_object_key"/>
+        <result property="ingestedAt" column="ingested_at"/>
+        <result property="referenceType" column="reference_type"/>
+        <result property="externalSourceUrl" column="external_source_url"/>
+        <result property="internalLocator" column="internal_locator"
+                typeHandler="org.apache.ibatis.type.ObjectTypeHandler"/>
+        <result property="originalFilename" column="original_filename"/>
+        <result property="normalizedFilename" column="normalized_filename"/>
+        <result property="documentStatus" column="document_status"/>
+        <result property="etag" column="etag"/>
+        <result property="httpLastModified" column="http_last_modified"/>
+        <result property="lastSeenAt" column="last_seen_at"/>
+        <result property="lastCheckedAt" column="last_checked_at"/>
+        <result property="degree" column="degree"/>
+        <result property="college" column="college"/>
+        <result property="campus" column="campus"/>
+        <result property="gradeRange" column="grade_range"/>
+    </resultMap>
+
+    <sql id="baseColumns">
+        id, source_id, title, source_url, source_org, published_at, content_hash,
+        file_object_key, ingested_at, reference_type, external_source_url,
+        internal_locator, original_filename, normalized_filename, document_status,
+        etag, http_last_modified, last_seen_at, last_checked_at, degree, college,
+        campus, grade_range
+    </sql>
+
+    <sql id="filters">
+        WHERE (CAST(#{sourceId,jdbcType=BIGINT} AS bigint) IS NULL
+                   OR source_id = #{sourceId,jdbcType=BIGINT})
+          AND (CAST(#{status,jdbcType=VARCHAR} AS varchar) IS NULL
+                   OR document_status = #{status,jdbcType=VARCHAR})
+          AND (CAST(#{title,jdbcType=VARCHAR} AS varchar) IS NULL
+                   OR position(
+                           lower(CAST(#{title,jdbcType=VARCHAR} AS varchar))
+                           in lower(title)) &gt; 0)
+          AND (CAST(#{referenceType,jdbcType=VARCHAR} AS varchar) IS NULL
+                   OR reference_type = #{referenceType,jdbcType=VARCHAR})
+          AND (CAST(#{ingestedFrom,jdbcType=TIMESTAMP_WITH_TIMEZONE} AS timestamptz) IS NULL
+                   OR ingested_at &gt;= #{ingestedFrom,jdbcType=TIMESTAMP_WITH_TIMEZONE})
+          AND (CAST(#{ingestedTo,jdbcType=TIMESTAMP_WITH_TIMEZONE} AS timestamptz) IS NULL
+                   OR ingested_at &lt;= #{ingestedTo,jdbcType=TIMESTAMP_WITH_TIMEZONE})
+    </sql>
+
+    <select id="lockIdentity" resultType="string">
+        SELECT pg_advisory_xact_lock(
+            hashtextextended(CAST(#{identity} AS text), 0)
+        )
+    </select>
+
+    <select id="insertDocument" resultMap="documentMap" affectData="true" flushCache="true">
+        INSERT INTO document (
+            source_id, title, source_url, source_org, published_at, content_hash,
+            file_object_key, reference_type, external_source_url, internal_locator,
+            original_filename, normalized_filename, document_status, etag,
+            http_last_modified, last_seen_at, last_checked_at, degree, college,
+            campus, grade_range
+        )
+        VALUES (
+            #{document.sourceId},
+            #{document.title},
+            #{document.sourceUrl},
+            #{document.sourceOrg,jdbcType=VARCHAR},
+            #{document.publishedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{document.contentHash},
+            #{document.fileObjectKey,jdbcType=VARCHAR},
+            #{document.referenceType},
+            #{document.externalSourceUrl,jdbcType=VARCHAR},
+            #{document.internalLocator,jdbcType=OTHER},
+            #{document.originalFilename,jdbcType=VARCHAR},
+            #{document.normalizedFilename,jdbcType=VARCHAR},
+            #{document.documentStatus},
+            #{document.etag,jdbcType=VARCHAR},
+            #{document.httpLastModified,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            COALESCE(#{document.lastSeenAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}, now()),
+            #{document.lastCheckedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{document.degree,jdbcType=VARCHAR},
+            #{document.college,jdbcType=VARCHAR},
+            #{document.campus,jdbcType=VARCHAR},
+            #{document.gradeRange,jdbcType=VARCHAR}
+        )
+        RETURNING <include refid="baseColumns"/>
+    </select>
+
+    <select id="updateDocument" resultMap="documentMap" affectData="true" flushCache="true">
+        UPDATE document
+        SET title = #{document.title},
+            source_url = #{document.sourceUrl},
+            source_org = #{document.sourceOrg,jdbcType=VARCHAR},
+            published_at = #{document.publishedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            content_hash = #{document.contentHash},
+            file_object_key = #{document.fileObjectKey,jdbcType=VARCHAR},
+            reference_type = #{document.referenceType},
+            external_source_url = #{document.externalSourceUrl,jdbcType=VARCHAR},
+            internal_locator = #{document.internalLocator,jdbcType=OTHER},
+            original_filename = #{document.originalFilename,jdbcType=VARCHAR},
+            normalized_filename = #{document.normalizedFilename,jdbcType=VARCHAR},
+            document_status = #{document.documentStatus},
+            etag = #{document.etag,jdbcType=VARCHAR},
+            http_last_modified = #{document.httpLastModified,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            last_seen_at = COALESCE(
+                #{document.lastSeenAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}, last_seen_at),
+            last_checked_at = #{document.lastCheckedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            degree = #{document.degree,jdbcType=VARCHAR},
+            college = #{document.college,jdbcType=VARCHAR},
+            campus = #{document.campus,jdbcType=VARCHAR},
+            grade_range = #{document.gradeRange,jdbcType=VARCHAR},
+            ingested_at = now()
+        WHERE id = #{id}
+        RETURNING <include refid="baseColumns"/>
+    </select>
+
+    <select id="countFiltered" resultType="long">
+        SELECT count(*)
+        FROM document
+        <include refid="filters"/>
+    </select>
+
+    <select id="findFiltered" resultMap="documentMap">
+        SELECT <include refid="baseColumns"/>
+        FROM document
+        <include refid="filters"/>
+        ORDER BY ingested_at DESC NULLS LAST, id DESC
+        LIMIT #{size}
+        OFFSET #{offset,jdbcType=BIGINT}
+    </select>
+
+    <select id="lockForMutation" resultMap="documentMap">
+        SELECT <include refid="baseColumns"/>
+        FROM document
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <select id="findAvailableForContent" resultMap="documentMap">
+        SELECT <include refid="baseColumns"/>
+        FROM document d
+        WHERE d.id = #{id}
+          AND d.document_status = 'ACTIVE'
+          AND EXISTS (
+              SELECT 1
+              FROM source s
+              WHERE s.id = d.source_id
+                AND s.deletion_status = 'NONE'
+          )
+    </select>
+
+    <select id="lockActiveForReindex" resultMap="documentMap">
+        WITH locked_source AS MATERIALIZED (
+            SELECT s.id
+            FROM source s
+            JOIN document candidate ON candidate.source_id = s.id
+            WHERE candidate.id = #{id}
+              AND s.deletion_status = 'NONE'
+            FOR UPDATE OF s
+        )
+        SELECT <include refid="baseColumns"/>
+        FROM document
+        WHERE id = #{id}
+          AND source_id IN (SELECT id FROM locked_source)
+          AND document_status = 'ACTIVE'
+        FOR UPDATE
+    </select>
+
+    <select id="findActiveForEmbeddingRebuild" resultMap="documentMap">
+        SELECT d.id, d.content_hash
+        FROM document d
+        JOIN source s ON s.id = d.source_id
+        WHERE d.document_status = 'ACTIVE'
+          AND s.deletion_status = 'NONE'
+        ORDER BY d.id ASC
+    </select>
+
+    <select id="lockActiveForEmbeddingRebuild" resultMap="documentMap">
+        WITH locked_source AS MATERIALIZED (
+            SELECT s.id
+            FROM source s
+            JOIN document candidate ON candidate.source_id = s.id
+            WHERE candidate.id = #{id}
+              AND s.deletion_status = 'NONE'
+            FOR UPDATE OF s
+        )
+        SELECT <include refid="baseColumns"/>
+        FROM document
+        WHERE id = #{id}
+          AND source_id IN (SELECT id FROM locked_source)
+          AND document_status = 'ACTIVE'
+        FOR UPDATE
+    </select>
+</mapper>

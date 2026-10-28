@@ -1,0 +1,52 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.profile.persistence.UserProfileMapper">
+
+    <resultMap id="userProfileMap"
+               type="xyz.v185v.collegeassistant.profile.persistence.UserProfileDO">
+        <id property="userId" column="user_id"/>
+        <result property="major" column="major"/>
+        <result property="grade" column="grade"/>
+        <result property="campus" column="campus"/>
+        <result property="degree" column="degree"/>
+        <result property="college" column="college"/>
+        <result property="lifecycleStage" column="lifecycle_stage"/>
+        <result property="courseRecordsJson" column="course_records"
+                typeHandler="xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="baseColumns">
+        user_id, major, grade, campus, degree, college,
+        lifecycle_stage, course_records, updated_at
+    </sql>
+
+    <select id="upsert" resultMap="userProfileMap" affectData="true" flushCache="true">
+        INSERT INTO user_profile (
+            user_id, major, grade, campus, degree, college,
+            lifecycle_stage, course_records, updated_at
+        )
+        VALUES (
+            #{profile.userId}, #{profile.major}, #{profile.grade}, #{profile.campus},
+            #{profile.degree}, #{profile.college}, #{profile.lifecycleStage},
+            #{profile.courseRecordsJson,
+                typeHandler=xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler},
+            now()
+        )
+        ON CONFLICT (user_id)
+        DO UPDATE SET
+            major = EXCLUDED.major,
+            grade = EXCLUDED.grade,
+            campus = EXCLUDED.campus,
+            degree = EXCLUDED.degree,
+            college = EXCLUDED.college,
+            lifecycle_stage = EXCLUDED.lifecycle_stage,
+            course_records = EXCLUDED.course_records,
+            updated_at = now()
+        RETURNING
+            <include refid="baseColumns"/>
+    </select>
+
+</mapper>

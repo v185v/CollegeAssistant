@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.document.persistence.SourceMapper">
+
+    <resultMap id="sourceMap"
+               type="xyz.v185v.collegeassistant.document.persistence.SourceDO">
+        <id property="id" column="id"/>
+        <result property="name" column="name"/>
+        <result property="baseUrl" column="base_url"/>
+        <result property="type" column="type"/>
+        <result property="enabled" column="enabled"/>
+        <result property="connectorType" column="connector_type"/>
+        <result property="deletionStatus" column="deletion_status"/>
+        <result property="scheduleType" column="schedule_type"/>
+        <result property="scheduleZone" column="schedule_zone"/>
+        <result property="cronExpression" column="cron_expression"/>
+        <result property="sameHostOnly" column="same_host_only"/>
+        <result property="maxDepth" column="max_depth"/>
+        <result property="maxPages" column="max_pages"/>
+        <result property="maxConcurrency" column="max_concurrency"/>
+        <result property="includePatternsJson" column="include_patterns"
+                typeHandler="xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler"/>
+        <result property="excludePatternsJson" column="exclude_patterns"
+                typeHandler="xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler"/>
+        <result property="nextRunAt" column="next_run_at"/>
+        <result property="lastRunAt" column="last_run_at"/>
+        <result property="createdBy" column="created_by"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="baseColumns">
+        id, name, base_url, type, enabled, connector_type, deletion_status,
+        schedule_type, schedule_zone, cron_expression, same_host_only,
+        max_depth, max_pages, max_concurrency, include_patterns, exclude_patterns,
+        next_run_at, last_run_at, created_by, created_at, updated_at
+    </sql>
+
+    <select id="insertReturning" resultMap="sourceMap" affectData="true" flushCache="true">
+        INSERT INTO source (
+            name, base_url, type, enabled, connector_type, deletion_status,
+            schedule_type, schedule_zone, cron_expression, same_host_only,
+            max_depth, max_pages, max_concurrency, include_patterns,
+            exclude_patterns, next_run_at, last_run_at, created_by
+        )
+        VALUES (
+            #{source.name},
+            #{source.baseUrl, jdbcType=VARCHAR},
+            #{source.type},
+            #{source.enabled},
+            #{source.connectorType},
+            #{source.deletionStatus},
+            #{source.scheduleType},
+            #{source.scheduleZone},
+            #{source.cronExpression, jdbcType=VARCHAR},
+            #{source.sameHostOnly},
+            #{source.maxDepth},
+            #{source.maxPages},
+            #{source.maxConcurrency},
+            #{source.includePatternsJson,
+                typeHandler=xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler},
+            #{source.excludePatternsJson,
+                typeHandler=xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler},
+            #{source.nextRunAt, jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{source.lastRunAt, jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{source.createdBy, jdbcType=BIGINT}
+        )
+        RETURNING <include refid="baseColumns"/>
+    </select>
+
+    <select id="updateReturning" resultMap="sourceMap" affectData="true" flushCache="true">
+        UPDATE source
+        SET name = #{source.name},
+            base_url = #{source.baseUrl, jdbcType=VARCHAR},
+            type = #{source.type},
+            enabled = #{source.enabled},
+            connector_type = #{source.connectorType},
+            schedule_type = #{source.scheduleType},
+            schedule_zone = #{source.scheduleZone},
+            cron_expression = #{source.cronExpression, jdbcType=VARCHAR},
+            same_host_only = #{source.sameHostOnly},
+            max_depth = #{source.maxDepth},
+            max_pages = #{source.maxPages},
+            max_concurrency = #{source.maxConcurrency},
+            include_patterns = #{source.includePatternsJson,
+                typeHandler=xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler},
+            exclude_patterns = #{source.excludePatternsJson,
+                typeHandler=xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler},
+            next_run_at = #{source.nextRunAt, jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            updated_at = now()
+        WHERE id = #{id}
+          AND deletion_status = 'NONE'
+        RETURNING <include refid="baseColumns"/>
+    </select>
+
+    <select id="lockById" resultMap="sourceMap">
+        SELECT <include refid="baseColumns"/>
+        FROM source
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <select id="lockDueScheduled" resultMap="sourceMap">
+        SELECT <include refid="baseColumns"/>
+        FROM source
+        WHERE enabled = true
+          AND deletion_status = 'NONE'
+          AND schedule_type &lt;&gt; 'MANUAL'
+          AND next_run_at &lt;= #{now, jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        ORDER BY next_run_at ASC, id ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT #{batchSize}
+    </select>
+
+    <update id="advanceScheduledRun">
+        UPDATE source
+        SET next_run_at = #{nextRunAt, jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            last_run_at = #{claimedAt, jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            updated_at = now()
+        WHERE id = #{id}
+          AND enabled = true
+          AND deletion_status = 'NONE'
+          AND schedule_type &lt;&gt; 'MANUAL'
+    </update>
+
+    <select id="setEnabledReturning" resultMap="sourceMap" affectData="true" flushCache="true">
+        UPDATE source
+        SET enabled = #{enabled},
+            updated_at = now()
+        WHERE id = #{id}
+          AND deletion_status = 'NONE'
+        RETURNING <include refid="baseColumns"/>
+    </select>
+
+    <update id="markDeleting">
+        UPDATE source
+        SET deletion_status = 'DELETING',
+            enabled = false,
+            updated_at = now()
+        WHERE id = #{id}
+          AND deletion_status IN ('NONE', 'DELETE_FAILED')
+    </update>
+
+    <update id="markDeleteFailed">
+        UPDATE source
+        SET deletion_status = 'DELETE_FAILED',
+            updated_at = now()
+        WHERE id = #{id}
+          AND deletion_status = 'DELETING'
+    </update>
+
+    <update id="resumeDeleting">
+        UPDATE source
+        SET deletion_status = 'DELETING',
+            enabled = false,
+            updated_at = now()
+        WHERE id = #{id}
+          AND deletion_status IN ('DELETING', 'DELETE_FAILED')
+    </update>
+
+    <delete id="deleteDeleting">
+        DELETE FROM source
+        WHERE id = #{id}
+          AND deletion_status = 'DELETING'
+    </delete>
+
+</mapper>

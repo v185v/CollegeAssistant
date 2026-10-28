@@ -1,0 +1,178 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.ai.config.persistence.ModelConfigurationMapper">
+
+    <resultMap id="configurationMap"
+               type="xyz.v185v.collegeassistant.ai.config.persistence.ModelConfigurationDO">
+        <id property="id" column="id"/>
+        <result property="configurationKey" column="configuration_key"/>
+        <result property="modelKind" column="model_kind"/>
+        <result property="provider" column="provider"/>
+        <result property="model" column="model"/>
+        <result property="baseUrl" column="base_url"/>
+        <result property="temperature" column="temperature"/>
+        <result property="dimension" column="dimension"/>
+        <result property="apiKeyCiphertext" column="api_key_ciphertext" jdbcType="BINARY"/>
+        <result property="apiKeyIv" column="api_key_iv" jdbcType="BINARY"/>
+        <result property="encryptionKeyId" column="encryption_key_id"/>
+        <result property="status" column="status"/>
+        <result property="createdBy" column="created_by"/>
+        <result property="activatedAt" column="activated_at"/>
+        <result property="failureReason" column="failure_reason"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="configurationColumns">
+        id, configuration_key, model_kind, provider, model, base_url,
+        temperature, dimension, api_key_ciphertext, api_key_iv,
+        encryption_key_id, status, created_by, activated_at, failure_reason,
+        created_at, updated_at
+    </sql>
+
+    <sql id="insertConfiguration">
+        INSERT INTO model_configuration (
+            id, configuration_key, model_kind, provider, model, base_url,
+            temperature, dimension, api_key_ciphertext, api_key_iv,
+            encryption_key_id, status, created_by, activated_at,
+            failure_reason, created_at, updated_at
+        ) VALUES (
+            #{configuration.id}, #{configuration.configurationKey,jdbcType=VARCHAR},
+            #{configuration.modelKind,jdbcType=VARCHAR}, #{configuration.provider,jdbcType=VARCHAR},
+            #{configuration.model,jdbcType=VARCHAR}, #{configuration.baseUrl,jdbcType=VARCHAR},
+            #{configuration.temperature,jdbcType=DOUBLE}, #{configuration.dimension,jdbcType=INTEGER},
+            #{configuration.apiKeyCiphertext,jdbcType=BINARY},
+            #{configuration.apiKeyIv,jdbcType=BINARY},
+            #{configuration.encryptionKeyId,jdbcType=VARCHAR}, #{configuration.status,jdbcType=VARCHAR},
+            #{configuration.createdBy,jdbcType=BIGINT},
+            #{configuration.activatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{configuration.failureReason,jdbcType=VARCHAR},
+            #{configuration.createdAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            #{configuration.updatedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+        )
+    </sql>
+
+    <select id="findAll" resultMap="configurationMap">
+        SELECT <include refid="configurationColumns"/>
+        FROM model_configuration
+        ORDER BY model_kind ASC,
+                 CASE status WHEN 'ACTIVE' THEN 0 WHEN 'PENDING' THEN 1 ELSE 2 END,
+                 created_at DESC, id DESC
+    </select>
+
+    <select id="lockById" resultMap="configurationMap">
+        SELECT <include refid="configurationColumns"/>
+        FROM model_configuration
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <select id="reserveId" resultType="long">
+        SELECT nextval(pg_get_serial_sequence('model_configuration', 'id'))
+    </select>
+
+    <select id="insertReturning" resultMap="configurationMap" affectData="true" flushCache="true">
+        <include refid="insertConfiguration"/>
+        RETURNING <include refid="configurationColumns"/>
+    </select>
+
+    <update id="retirePending">
+        UPDATE model_configuration
+        SET status = 'RETIRED', updated_at = now(), failure_reason = NULL
+        WHERE model_kind = #{modelKind,jdbcType=VARCHAR}
+          AND status = 'PENDING'
+    </update>
+
+    <select id="publishPendingReturning" resultMap="configurationMap"
+            affectData="true" flushCache="true">
+        <include refid="insertConfiguration"/>
+        RETURNING <include refid="configurationColumns"/>
+    </select>
+
+    <select id="activateChatReturning" resultMap="configurationMap"
+            affectData="true" flushCache="true">
+        WITH current_active AS (
+            SELECT id
+            FROM model_configuration
+            WHERE model_kind = 'CHAT' AND status = 'ACTIVE'
+            FOR UPDATE
+        ), retired AS (
+            UPDATE model_configuration configuration
+            SET status = 'RETIRED', updated_at = now()
+            FROM current_active
+            WHERE configuration.id = current_active.id
+            RETURNING configuration.id
+        )
+        UPDATE model_configuration candidate
+        SET status = 'ACTIVE', activated_at = now(),
+            failure_reason = NULL, updated_at = now()
+        WHERE candidate.id = #{id}
+          AND candidate.model_kind = 'CHAT'
+          AND candidate.status = 'PENDING'
+          AND (SELECT count(*) FROM retired) &gt;= 0
+        RETURNING <include refid="configurationColumns"/>
+    </select>
+
+    <select id="activateEmbeddingReturning" resultMap="configurationMap"
+            affectData="true" flushCache="true">
+        WITH current_active AS (
+            SELECT id
+            FROM model_configuration
+            WHERE model_kind = 'EMBEDDING' AND status = 'ACTIVE'
+            FOR UPDATE
+        ), retired AS (
+            UPDATE model_configuration configuration
+            SET status = 'RETIRED', updated_at = now()
+            FROM current_active
+            WHERE configuration.id = current_active.id
+            RETURNING configuration.id
+        )
+        UPDATE model_configuration candidate
+        SET status = 'ACTIVE', activated_at = now(),
+            failure_reason = NULL, updated_at = now()
+        WHERE candidate.id = #{id}
+          AND candidate.model_kind = 'EMBEDDING'
+          AND candidate.status = 'PENDING'
+          AND (SELECT count(*) FROM retired) &gt;= 0
+        RETURNING <include refid="configurationColumns"/>
+    </select>
+
+    <select id="retirePendingEmbeddingReturning" resultMap="configurationMap"
+            affectData="true" flushCache="true">
+        UPDATE model_configuration
+        SET status = 'RETIRED', failure_reason = #{reason,jdbcType=VARCHAR}, updated_at = now()
+        WHERE id = #{id}
+          AND model_kind = 'EMBEDDING'
+          AND status = 'PENDING'
+        RETURNING <include refid="configurationColumns"/>
+    </select>
+
+    <update id="markFailed">
+        UPDATE model_configuration
+        SET status = 'FAILED', failure_reason = #{reason,jdbcType=VARCHAR}, updated_at = now()
+        WHERE id = #{id}
+          AND status = 'PENDING'
+    </update>
+
+    <update id="markEmbeddingFailed">
+        UPDATE model_configuration
+        SET status = 'FAILED', failure_reason = #{reason,jdbcType=VARCHAR}, updated_at = now()
+        WHERE id = #{id}
+          AND model_kind = 'EMBEDDING'
+          AND status = 'PENDING'
+    </update>
+
+    <select id="insertCleanupJob" resultType="long" affectData="true" flushCache="true">
+        INSERT INTO admin_job (
+            job_type, target_type, target_id, requested_by, request_payload
+        ) VALUES (
+            'INDEX_CLEANUP', 'EMBEDDING_CONFIGURATION',
+            #{configurationId,jdbcType=BIGINT}, NULL,
+            jsonb_build_object('embeddingConfigurationId', #{configurationId,jdbcType=BIGINT})
+        )
+        ON CONFLICT DO NOTHING
+        RETURNING id
+    </select>
+</mapper>

@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.ingestion.persistence.IngestRunItemMapper">
+
+    <resultMap id="itemMap"
+               type="xyz.v185v.collegeassistant.ingestion.persistence.IngestRunItemDO">
+        <id property="id" column="id"/>
+        <result property="runId" column="run_id"/>
+        <result property="itemKey" column="item_key"/>
+        <result property="itemKind" column="item_kind"/>
+        <result property="status" column="status"/>
+        <result property="documentId" column="document_id"/>
+        <result property="retryCount" column="retry_count"/>
+        <result property="nextAttemptAt" column="next_attempt_at"/>
+        <result property="errorCode" column="error_code"/>
+        <result property="errorSummary" column="error_summary"/>
+        <result property="checkpointJson" column="checkpoint"/>
+        <result property="checkpointAttempt" column="checkpoint_attempt"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="itemColumns">
+        id, run_id, item_key, item_kind, status, document_id,
+        retry_count, next_attempt_at, error_code, error_summary,
+        checkpoint::text AS checkpoint, checkpoint_attempt, created_at, updated_at
+    </sql>
+
+    <select id="upsertItem" resultMap="itemMap" affectData="true" flushCache="true">
+        INSERT INTO ingest_run_item (run_id, item_key, item_kind)
+        SELECT #{runId}, #{itemKey}, #{itemKind}
+        WHERE EXISTS (
+            SELECT 1
+            FROM ingest_run
+            WHERE id = #{runId}
+              AND status = 'RUNNING'
+              AND attempt = #{attempt}
+              AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+        )
+        ON CONFLICT (run_id, item_key) DO UPDATE
+        SET updated_at = now()
+        RETURNING <include refid="itemColumns"/>
+    </select>
+
+    <select id="upsertDiscovered" resultMap="itemMap" affectData="true" flushCache="true">
+        INSERT INTO ingest_run_item (run_id, item_key, item_kind)
+        SELECT #{runId}, #{itemKey}, 'URL'
+        WHERE EXISTS (
+            SELECT 1
+            FROM ingest_run
+            WHERE id = #{runId}
+              AND status = 'RUNNING'
+        )
+        ON CONFLICT (run_id, item_key) DO UPDATE
+        SET updated_at = now()
+        RETURNING <include refid="itemColumns"/>
+    </select>
+
+    <update id="deferUnfinished">
+        UPDATE ingest_run_item
+        SET status = 'FAILED',
+            retry_count = retry_count + 1,
+            next_attempt_at = #{nextAttemptAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            error_code = 'HTTP_429',
+            error_summary = 'Remote source requested a deferred retry',
+            updated_at = now()
+        WHERE run_id = #{runId}
+          AND status IN ('QUEUED', 'RUNNING')
+    </update>
+
+    <update id="checkpointIfLeaseActive">
+        UPDATE ingest_run_item item
+        SET status = #{status},
+            document_id = #{documentId,jdbcType=BIGINT},
+            checkpoint = CAST(#{checkpointJson} AS jsonb),
+            checkpoint_attempt = #{attempt},
+            error_code = NULL,
+            error_summary = NULL,
+            updated_at = now()
+        WHERE item.id = #{itemId}
+          AND item.run_id = #{runId}
+          AND EXISTS (
+              SELECT 1
+              FROM ingest_run run
+              WHERE run.id = #{runId}
+                AND run.status = 'RUNNING'
+                AND run.attempt = #{attempt}
+                AND run.lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+          )
+    </update>
+</mapper>

@@ -1,0 +1,245 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.ugc.persistence.UgcMapper">
+
+    <resultMap id="postRow" type="xyz.v185v.collegeassistant.ugc.persistence.UgcPostRow">
+        <constructor>
+            <idArg column="id" javaType="java.lang.Long"/>
+            <arg column="author_id" javaType="java.lang.Long"/>
+            <arg column="author_name" javaType="java.lang.String"/>
+            <arg column="title" javaType="java.lang.String"/>
+            <arg column="content" javaType="java.lang.String"/>
+            <arg column="tags" javaType="java.lang.String"
+                 typeHandler="xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler"/>
+            <arg column="related_course" javaType="java.lang.String"/>
+            <arg column="related_location" javaType="java.lang.String"/>
+            <arg column="status" javaType="java.lang.String"/>
+            <arg column="likes" javaType="java.lang.Long"/>
+            <arg column="reports" javaType="java.lang.Long"/>
+            <arg column="reject_reason" javaType="java.lang.String"/>
+            <arg column="created_at" javaType="java.time.OffsetDateTime"/>
+            <arg column="reviewed_at" javaType="java.time.OffsetDateTime"/>
+            <arg column="updated_at" javaType="java.time.OffsetDateTime"/>
+        </constructor>
+    </resultMap>
+
+    <resultMap id="report" type="xyz.v185v.collegeassistant.ugc.persistence.UgcReportDO">
+        <id property="id" column="id"/>
+        <result property="postId" column="post_id"/>
+        <result property="reporterId" column="reporter_id"/>
+        <result property="reporterName" column="reporter_name"/>
+        <result property="reason" column="reason"/>
+        <result property="status" column="status"/>
+        <result property="reviewerId" column="reviewer_id"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="resolvedAt" column="resolved_at"/>
+    </resultMap>
+
+    <sql id="postProjection">
+        p.id, p.author_id, u.display_name AS author_name,
+        p.title, p.content, p.tags::text AS tags, p.related_course, p.related_location,
+        p.status, p.likes, p.reports, p.reject_reason,
+        p.created_at, p.reviewed_at, p.updated_at
+    </sql>
+
+    <select id="createReturningPost" resultMap="postRow" affectData="true" flushCache="true">
+        WITH inserted AS (
+            INSERT INTO ugc_post (
+                author_id, title, content, tags, related_course, related_location,
+                status, likes, reports
+            )
+            VALUES (
+                #{authorId}, #{post.title}, #{post.content},
+                #{post.tagsJson, typeHandler=xyz.v185v.collegeassistant.persistence.typehandler.JsonbStringTypeHandler},
+                #{post.relatedCourse, jdbcType=VARCHAR}, #{post.relatedLocation, jdbcType=VARCHAR},
+                'PENDING', 0, 0
+            )
+            RETURNING id, author_id, title, content, tags, related_course, related_location,
+                      status, likes, reports, reject_reason, created_at, reviewed_at, updated_at
+        )
+        SELECT i.id, i.author_id, u.display_name AS author_name,
+               i.title, i.content, i.tags::text AS tags, i.related_course, i.related_location,
+               i.status, i.likes, i.reports, i.reject_reason,
+               i.created_at, i.reviewed_at, i.updated_at
+        FROM inserted i
+        JOIN users u ON u.id = i.author_id
+    </select>
+
+    <select id="countPosts" resultType="long">
+        SELECT COUNT(*)
+        FROM ugc_post p
+        WHERE (#{authorId, jdbcType=BIGINT} IS NULL OR p.author_id = #{authorId, jdbcType=BIGINT})
+          AND (#{status, jdbcType=VARCHAR} IS NULL OR p.status = #{status, jdbcType=VARCHAR})
+          AND (#{tagJson, jdbcType=VARCHAR} IS NULL
+               OR p.tags @> CAST(#{tagJson, jdbcType=VARCHAR} AS jsonb))
+    </select>
+
+    <select id="findPosts" resultMap="postRow">
+        SELECT <include refid="postProjection"/>
+        FROM ugc_post p
+        JOIN users u ON u.id = p.author_id
+        WHERE (#{authorId, jdbcType=BIGINT} IS NULL OR p.author_id = #{authorId, jdbcType=BIGINT})
+          AND (#{status, jdbcType=VARCHAR} IS NULL OR p.status = #{status, jdbcType=VARCHAR})
+          AND (#{tagJson, jdbcType=VARCHAR} IS NULL
+               OR p.tags @> CAST(#{tagJson, jdbcType=VARCHAR} AS jsonb))
+        ORDER BY p.created_at DESC, p.id DESC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+
+    <select id="findPostById" resultMap="postRow">
+        SELECT <include refid="postProjection"/>
+        FROM ugc_post p
+        JOIN users u ON u.id = p.author_id
+        WHERE p.id = #{id}
+    </select>
+
+    <select id="removeReturningPost" resultMap="postRow" affectData="true" flushCache="true">
+        WITH updated AS (
+            UPDATE ugc_post
+            SET status = 'REMOVED',
+                updated_at = now()
+            WHERE id = #{id}
+            RETURNING id, author_id, title, content, tags, related_course, related_location,
+                      status, likes, reports, reject_reason, created_at, reviewed_at, updated_at
+        )
+        SELECT u.id, u.author_id, a.display_name AS author_name,
+               u.title, u.content, u.tags::text AS tags, u.related_course, u.related_location,
+               u.status, u.likes, u.reports, u.reject_reason,
+               u.created_at, u.reviewed_at, u.updated_at
+        FROM updated u
+        JOIN users a ON a.id = u.author_id
+    </select>
+
+    <select id="findApprovedById" resultMap="postRow">
+        SELECT <include refid="postProjection"/>
+        FROM ugc_post p
+        JOIN users u ON u.id = p.author_id
+        WHERE p.id = #{id}
+          AND p.status = 'APPROVED'
+    </select>
+
+    <select id="ensureLike" resultType="long" affectData="true" flushCache="true">
+        INSERT INTO ugc_like (post_id, user_id)
+        SELECT p.id, #{userId}
+        FROM ugc_post p
+        WHERE p.id = #{postId}
+          AND p.status = 'APPROVED'
+        ON CONFLICT (post_id, user_id) DO NOTHING
+        RETURNING post_id
+    </select>
+
+    <select id="ensureReport" resultType="long" affectData="true" flushCache="true">
+        INSERT INTO ugc_report (post_id, reporter_id, reason)
+        SELECT p.id, #{reporterId}, #{reason}
+        FROM ugc_post p
+        WHERE p.id = #{postId}
+          AND p.status = 'APPROVED'
+        ON CONFLICT (post_id, reporter_id) DO NOTHING
+        RETURNING post_id
+    </select>
+
+    <select id="countReports" resultType="long">
+        SELECT COUNT(*)
+        FROM ugc_report
+        WHERE post_id = #{postId}
+    </select>
+
+    <select id="findReports" resultMap="report">
+        SELECT r.id, r.post_id, r.reporter_id, u.display_name AS reporter_name,
+               r.reason, r.status, r.reviewer_id, r.created_at, r.resolved_at
+        FROM ugc_report r
+        JOIN users u ON u.id = r.reporter_id
+        WHERE r.post_id = #{postId}
+        ORDER BY r.created_at DESC, r.id DESC
+        LIMIT #{size} OFFSET #{offset}
+    </select>
+
+    <select id="findReport" resultMap="report">
+        SELECT r.id, r.post_id, r.reporter_id, u.display_name AS reporter_name,
+               r.reason, r.status, r.reviewer_id, r.created_at, r.resolved_at
+        FROM ugc_report r
+        JOIN users u ON u.id = r.reporter_id
+        WHERE r.post_id = #{postId}
+          AND r.id = #{reportId}
+    </select>
+
+    <select id="resolveReportReturning" resultMap="report" affectData="true" flushCache="true">
+        WITH updated AS (
+            UPDATE ugc_report
+            SET status = #{status},
+                reviewer_id = #{reviewerId},
+                resolved_at = now()
+            WHERE post_id = #{postId}
+              AND id = #{reportId}
+              AND status = 'OPEN'
+            RETURNING id, post_id, reporter_id, reason, status, reviewer_id, created_at, resolved_at
+        )
+        SELECT r.id, r.post_id, r.reporter_id, u.display_name AS reporter_name,
+               r.reason, r.status, r.reviewer_id, r.created_at, r.resolved_at
+        FROM updated r
+        JOIN users u ON u.id = r.reporter_id
+    </select>
+
+    <select id="lockIfApproved" resultType="string">
+        SELECT status
+        FROM ugc_post
+        WHERE id = #{id}
+        FOR UPDATE
+    </select>
+
+    <select id="findApprovedForEmbeddingRebuild" resultMap="postRow">
+        SELECT <include refid="postProjection"/>
+        FROM ugc_post p
+        JOIN users u ON u.id = p.author_id
+        WHERE p.status = 'APPROVED'
+        ORDER BY p.id ASC
+    </select>
+
+    <select id="lockApprovedForEmbeddingRebuild" resultMap="postRow">
+        SELECT <include refid="postProjection"/>
+        FROM ugc_post p
+        JOIN users u ON u.id = p.author_id
+        WHERE p.id = #{id}
+          AND p.status = 'APPROVED'
+        FOR UPDATE OF p
+    </select>
+
+    <select id="findApprovedWithoutChunksAfter" resultType="long">
+        SELECT p.id
+        FROM ugc_post p
+        WHERE p.status = 'APPROVED'
+          AND p.id > #{afterId}
+          AND NOT EXISTS (
+              SELECT 1
+              FROM embedding_chunk c
+              WHERE c.doc_ref_type = 'UGC'
+                AND c.source_type = 'UGC'
+                AND c.doc_ref_id = p.id
+          )
+        ORDER BY p.id ASC
+        LIMIT #{limit}
+    </select>
+
+    <select id="reviewReturningPost" resultMap="postRow" affectData="true" flushCache="true">
+        WITH updated AS (
+            UPDATE ugc_post
+            SET status = #{status},
+                reviewed_by = #{reviewerId},
+                reject_reason = #{rejectReason, jdbcType=VARCHAR},
+                reviewed_at = now(),
+                updated_at = now()
+            WHERE id = #{id}
+              AND status = 'PENDING'
+            RETURNING id, author_id, title, content, tags, related_course, related_location,
+                      status, likes, reports, reject_reason, created_at, reviewed_at, updated_at
+        )
+        SELECT u.id, u.author_id, a.display_name AS author_name,
+               u.title, u.content, u.tags::text AS tags, u.related_course, u.related_location,
+               u.status, u.likes, u.reports, u.reject_reason,
+               u.created_at, u.reviewed_at, u.updated_at
+        FROM updated u
+        JOIN users a ON a.id = u.author_id
+    </select>
+</mapper>

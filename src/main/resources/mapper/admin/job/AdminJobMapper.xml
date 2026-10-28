@@ -1,0 +1,285 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.admin.job.persistence.AdminJobMapper">
+
+    <resultMap id="jobMap"
+               type="xyz.v185v.collegeassistant.admin.job.persistence.AdminJobDO">
+        <id property="id" column="id"/>
+        <result property="jobType" column="job_type"/>
+        <result property="status" column="status"/>
+        <result property="targetType" column="target_type"/>
+        <result property="targetId" column="target_id"/>
+        <result property="requestedBy" column="requested_by"/>
+        <result property="attempt" column="attempt"/>
+        <result property="workerId" column="worker_id"/>
+        <result property="leaseToken" column="lease_token"
+                typeHandler="org.apache.ibatis.type.ObjectTypeHandler"/>
+        <result property="claimedAt" column="claimed_at"/>
+        <result property="heartbeatAt" column="heartbeat_at"/>
+        <result property="startedAt" column="started_at"/>
+        <result property="finishedAt" column="finished_at"/>
+        <result property="errorCode" column="error_code"/>
+        <result property="errorSummary" column="error_summary"/>
+        <result property="requestPayloadJson" column="request_payload"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <resultMap id="itemMap"
+               type="xyz.v185v.collegeassistant.admin.job.persistence.AdminJobItemDO">
+        <id property="id" column="id"/>
+        <result property="jobId" column="job_id"/>
+        <result property="itemKey" column="item_key"/>
+        <result property="itemType" column="item_type"/>
+        <result property="targetType" column="target_type"/>
+        <result property="targetId" column="target_id"/>
+        <result property="status" column="status"/>
+        <result property="retryCount" column="retry_count"/>
+        <result property="errorCode" column="error_code"/>
+        <result property="errorSummary" column="error_summary"/>
+        <result property="checkpointJson" column="checkpoint"/>
+        <result property="checkpointAttempt" column="checkpoint_attempt"/>
+        <result property="createdAt" column="created_at"/>
+        <result property="updatedAt" column="updated_at"/>
+    </resultMap>
+
+    <sql id="jobColumns">
+        id, job_type, status, target_type, target_id, requested_by,
+        attempt, worker_id, lease_token, claimed_at, heartbeat_at,
+        started_at, finished_at, error_code, error_summary,
+        request_payload::text AS request_payload, created_at, updated_at
+    </sql>
+
+    <sql id="itemColumns">
+        id, job_id, item_key, item_type, target_type, target_id,
+        status, retry_count, error_code, error_summary,
+        checkpoint::text AS checkpoint, checkpoint_attempt, created_at, updated_at
+    </sql>
+
+    <select id="createJob" resultMap="jobMap" affectData="true" flushCache="true">
+        INSERT INTO admin_job (
+            job_type, target_type, target_id, requested_by, request_payload
+        )
+        VALUES (
+            #{jobType}, #{targetType}, #{targetId,jdbcType=BIGINT},
+            #{requestedBy,jdbcType=BIGINT},
+            CAST(#{requestPayloadJson,jdbcType=VARCHAR} AS jsonb)
+        )
+        ON CONFLICT DO NOTHING
+        RETURNING <include refid="jobColumns"/>
+    </select>
+
+    <select id="findItems" resultMap="itemMap">
+        SELECT <include refid="itemColumns"/>
+        FROM admin_job_item
+        WHERE job_id = #{jobId}
+        ORDER BY id ASC
+    </select>
+
+    <select id="hasConflictingEmbeddingRebuildWork" resultType="boolean">
+        SELECT (
+            EXISTS (
+                SELECT 1
+                FROM ingest_run
+                WHERE status IN ('RUNNING', 'DEFERRED')
+            )
+            OR EXISTS (
+                SELECT 1
+                FROM admin_job
+                WHERE job_type IN (
+                    'SOURCE_DELETE', 'DOCUMENT_DELETE', 'DOCUMENT_REINDEX'
+                )
+                  AND status IN ('QUEUED', 'RUNNING')
+            )
+        )
+    </select>
+
+    <update id="cancelQueuedEmbeddingRebuild">
+        UPDATE admin_job
+        SET status = 'CANCELLED',
+            finished_at = now(),
+            error_code = NULL,
+            error_summary = NULL,
+            updated_at = now()
+        WHERE job_type = 'EMBEDDING_REBUILD'
+          AND target_id = #{configurationId}
+          AND status = 'QUEUED'
+    </update>
+
+    <select id="lockEmbeddingMaintenanceState" resultType="int">
+        SELECT 1
+        FROM (
+            SELECT pg_advisory_xact_lock(
+                hashtextextended('college-assistant:embedding-maintenance', 0)
+            )
+        ) locked
+    </select>
+
+    <select id="hasBlockingEmbeddingRebuildForPendingConfiguration" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1
+            FROM admin_job job
+            INNER JOIN model_configuration configuration
+                ON configuration.id = job.target_id
+            WHERE job.job_type = 'EMBEDDING_REBUILD'
+              AND configuration.model_kind = 'EMBEDDING'
+              AND configuration.status = 'PENDING'
+              AND job.status IN (
+                  'QUEUED', 'RUNNING', 'SUCCEEDED', 'FAILED', 'PARTIAL_SUCCESS'
+              )
+        )
+    </select>
+
+    <select id="claimNext" resultMap="jobMap" affectData="true" flushCache="true">
+        WITH candidate AS (
+            SELECT id
+            FROM admin_job
+            WHERE status = 'QUEUED'
+            ORDER BY created_at ASC, id ASC
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        )
+        UPDATE admin_job job
+        SET status = 'RUNNING',
+            worker_id = #{workerId},
+            lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid),
+            claimed_at = now(),
+            heartbeat_at = now(),
+            started_at = now(),
+            updated_at = now()
+        FROM candidate
+        WHERE job.id = candidate.id
+        RETURNING job.id, job.attempt, job.worker_id, job.lease_token
+    </select>
+
+    <update id="heartbeat">
+        UPDATE admin_job
+        SET heartbeat_at = now(), updated_at = now()
+        WHERE id = #{jobId}
+          AND status = 'RUNNING'
+          AND attempt = #{attempt}
+          AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+    </update>
+
+    <update id="finish">
+        UPDATE admin_job
+        SET status = #{status},
+            error_code = #{errorCode,jdbcType=VARCHAR},
+            error_summary = #{errorSummary,jdbcType=VARCHAR},
+            finished_at = now(),
+            updated_at = now()
+        WHERE id = #{jobId}
+          AND status = 'RUNNING'
+          AND attempt = #{attempt}
+          AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+    </update>
+
+    <select id="retryFailed" resultMap="jobMap" affectData="true" flushCache="true">
+        UPDATE admin_job
+        SET status = 'QUEUED',
+            attempt = attempt + 1,
+            worker_id = NULL,
+            lease_token = NULL,
+            claimed_at = NULL,
+            heartbeat_at = NULL,
+            started_at = NULL,
+            finished_at = NULL,
+            error_code = NULL,
+            error_summary = NULL,
+            updated_at = now()
+        WHERE id = #{jobId}
+          AND status IN ('FAILED', 'PARTIAL_SUCCESS')
+        RETURNING <include refid="jobColumns"/>
+    </select>
+
+    <update id="resetRetryableItems">
+        UPDATE admin_job_item
+        SET status = 'QUEUED',
+            retry_count = retry_count + 1,
+            error_code = NULL,
+            error_summary = NULL,
+            updated_at = now()
+        WHERE job_id = #{jobId}
+          AND status IN ('RUNNING', 'FAILED', 'PARTIAL_SUCCESS')
+    </update>
+
+    <select id="expireStaleReturning" resultMap="jobMap"
+            affectData="true" flushCache="true">
+        UPDATE admin_job
+        SET status = 'FAILED',
+            worker_id = NULL,
+            lease_token = NULL,
+            finished_at = now(),
+            error_code = 'LEASE_EXPIRED',
+            error_summary = 'Lease expired',
+            updated_at = now()
+        WHERE status = 'RUNNING'
+          AND heartbeat_at &lt; now() - CAST(#{timeout,jdbcType=VARCHAR} AS interval)
+        RETURNING <include refid="jobColumns"/>
+    </select>
+
+    <select id="upsertItem" resultMap="itemMap" affectData="true" flushCache="true">
+        INSERT INTO admin_job_item (
+            job_id, item_key, item_type, target_type, target_id
+        )
+        SELECT #{jobId}, #{itemKey}, #{itemType},
+               #{targetType,jdbcType=VARCHAR}, #{targetId,jdbcType=BIGINT}
+        WHERE EXISTS (
+            SELECT 1
+            FROM admin_job
+            WHERE id = #{jobId}
+              AND status = 'RUNNING'
+              AND attempt = #{attempt}
+              AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+        )
+        ON CONFLICT (job_id, item_key) DO UPDATE
+        SET item_type = EXCLUDED.item_type,
+            target_type = EXCLUDED.target_type,
+            target_id = EXCLUDED.target_id,
+            updated_at = now()
+        RETURNING <include refid="itemColumns"/>
+    </select>
+
+    <update id="checkpoint">
+        UPDATE admin_job_item item
+        SET status = #{status},
+            checkpoint = CAST(#{checkpointJson,jdbcType=VARCHAR} AS jsonb),
+            checkpoint_attempt = #{attempt},
+            error_code = NULL,
+            error_summary = NULL,
+            updated_at = now()
+        WHERE item.id = #{itemId}
+          AND item.job_id = #{jobId}
+          AND EXISTS (
+              SELECT 1
+              FROM admin_job job
+              WHERE job.id = #{jobId}
+                AND job.status = 'RUNNING'
+                AND job.attempt = #{attempt}
+                AND job.lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+          )
+    </update>
+
+    <select id="lockAndAssertActive" resultType="long">
+        SELECT id
+        FROM admin_job
+        WHERE id = #{jobId}
+          AND status = 'RUNNING'
+          AND attempt = #{attempt}
+          AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+        FOR UPDATE
+    </select>
+
+    <select id="isActive" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1
+            FROM admin_job
+            WHERE id = #{jobId}
+              AND status = 'RUNNING'
+              AND attempt = #{attempt}
+              AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+        )
+    </select>
+</mapper>

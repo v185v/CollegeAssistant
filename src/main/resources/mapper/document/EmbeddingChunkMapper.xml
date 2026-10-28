@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.document.persistence.EmbeddingChunkMapper">
+
+    <resultMap id="chunkMap"
+               type="xyz.v185v.collegeassistant.document.persistence.EmbeddingChunkDO">
+        <id property="id" column="id"/>
+        <result property="embeddingConfigId" column="embedding_config_id"/>
+        <result property="docRefType" column="doc_ref_type"/>
+        <result property="docRefId" column="doc_ref_id"/>
+        <result property="chunkIndex" column="chunk_index"/>
+        <result property="chunkText" column="chunk_text"/>
+        <result property="embeddingText" column="embedding_text"/>
+        <result property="sourceType" column="source_type"/>
+        <result property="sourceUrl" column="source_url"/>
+        <result property="title" column="title"/>
+        <result property="sourceOrg" column="source_org"/>
+        <result property="publishedAt" column="published_at"/>
+        <result property="degree" column="degree"/>
+        <result property="college" column="college"/>
+        <result property="campus" column="campus"/>
+        <result property="gradeRange" column="grade_range"/>
+        <result property="metaJson" column="meta_json"/>
+        <result property="createdAt" column="created_at"/>
+    </resultMap>
+
+    <resultMap id="searchResultMap"
+               type="xyz.v185v.collegeassistant.document.persistence.EmbeddingChunkDO"
+               extends="chunkMap">
+        <result property="documentReferenceType" column="document_reference_type"/>
+        <result property="documentId" column="document_id"/>
+        <result property="externalSourceUrl" column="external_source_url"/>
+        <result property="score" column="score"/>
+    </resultMap>
+
+    <sql id="baseColumns">
+        id, embedding_config_id, doc_ref_type, doc_ref_id, chunk_index,
+        chunk_text, embedding::text AS embedding_text, source_type,
+        source_url, title, source_org, published_at, degree, college,
+        campus, grade_range, meta::text AS meta_json, created_at
+    </sql>
+
+    <select id="findForReference" resultMap="chunkMap">
+        SELECT <include refid="baseColumns"/>
+        FROM embedding_chunk
+        WHERE embedding_config_id = #{embeddingConfigId}
+          AND doc_ref_type = #{docRefType}
+          AND doc_ref_id = #{docRefId}
+        ORDER BY chunk_index ASC, id ASC
+    </select>
+
+    <update id="setStrictHnswOrder">
+        SET LOCAL hnsw.iterative_scan = strict_order
+    </update>
+
+    <select id="search" resultMap="searchResultMap">
+        WITH filtered AS (
+            SELECT ec.id, ec.embedding_config_id, ec.doc_ref_type, ec.doc_ref_id,
+                   ec.chunk_index, ec.chunk_text, ec.embedding::text AS embedding_text,
+                   ec.source_type, ec.source_url, ec.title, ec.source_org,
+                   ec.published_at, ec.degree, ec.college, ec.campus, ec.grade_range,
+                   CASE
+                       WHEN ec.source_type = 'UGC' THEN
+                           ec.meta || jsonb_build_object(
+                               'likes', approved_ugc.likes,
+                               'reports', approved_ugc.reports
+                           )
+                       ELSE ec.meta
+                   END AS meta,
+                   ec.created_at,
+                   official_document.reference_type AS document_reference_type,
+                   official_document.id AS document_id,
+                   official_document.external_source_url AS external_source_url,
+                   ec.embedding &lt;=> CAST(#{queryEmbedding} AS vector) AS distance
+            FROM embedding_chunk ec
+            LEFT JOIN document official_document
+              ON ec.source_type = 'OFFICIAL'
+             AND ec.doc_ref_type = 'DOCUMENT'
+             AND official_document.id = ec.doc_ref_id
+            LEFT JOIN ugc_post approved_ugc
+              ON ec.source_type = 'UGC'
+             AND ec.doc_ref_type = 'UGC'
+             AND approved_ugc.id = ec.doc_ref_id
+             AND approved_ugc.status = 'APPROVED'
+            WHERE ec.embedding_config_id = #{embeddingConfigId}
+              AND (CAST(#{sourceType,jdbcType=VARCHAR} AS varchar) IS NULL
+                   OR ec.source_type = #{sourceType,jdbcType=VARCHAR})
+              AND (CAST(#{degree,jdbcType=VARCHAR} AS varchar) IS NULL
+                   OR ec.degree = #{degree,jdbcType=VARCHAR} OR ec.degree = 'GENERAL')
+              AND (CAST(#{college,jdbcType=VARCHAR} AS varchar) IS NULL
+                   OR ec.college = #{college,jdbcType=VARCHAR} OR ec.college = 'GENERAL')
+              AND (CAST(#{campus,jdbcType=VARCHAR} AS varchar) IS NULL
+                   OR ec.campus = #{campus,jdbcType=VARCHAR} OR ec.campus = 'GENERAL')
+              AND (CAST(#{gradeRange,jdbcType=VARCHAR} AS varchar) IS NULL
+                   OR ec.grade_range = #{gradeRange,jdbcType=VARCHAR}
+                   OR ec.grade_range = 'GENERAL')
+              AND (
+                  (
+                      ec.source_type = 'OFFICIAL'
+                      AND official_document.id IS NOT NULL
+                  )
+                  OR (
+                      ec.source_type = 'UGC'
+                      AND approved_ugc.id IS NOT NULL
+                  )
+              )
+        )
+        SELECT id, embedding_config_id, doc_ref_type, doc_ref_id, chunk_index,
+               chunk_text, embedding_text, source_type, source_url, title,
+               source_org, published_at, degree, college, campus, grade_range,
+               meta::text AS meta_json, created_at, document_reference_type,
+               document_id, external_source_url, 1.0 - distance AS score
+        FROM filtered
+        ORDER BY distance ASC, id ASC
+        LIMIT #{topK}
+    </select>
+
+    <select id="lockReplacement" resultType="string">
+        SELECT pg_advisory_xact_lock(
+            hashtextextended(
+                CAST(concat(
+                    'embedding_chunk:', CAST(#{embeddingConfigId} AS text), ':',
+                    CAST(#{docRefTypeLength} AS text), ':',
+                    CAST(#{docRefType} AS text), ':', CAST(#{docRefId} AS text)
+                ) AS text),
+                0
+            )
+        )
+    </select>
+
+    <select id="insertBatchReturning" resultMap="chunkMap"
+            affectData="true" flushCache="true">
+        INSERT INTO embedding_chunk (
+            embedding_config_id, doc_ref_type, doc_ref_id, chunk_index,
+            chunk_text, embedding, source_type, source_url, title, source_org,
+            published_at, degree, college, campus, grade_range, meta
+        )
+        VALUES
+        <foreach collection="chunks" item="chunk" separator=",">
+            (
+                #{chunk.embeddingConfigId}, #{chunk.docRefType}, #{chunk.docRefId},
+                #{chunk.chunkIndex}, #{chunk.chunkText},
+                CAST(#{chunk.embeddingText} AS vector), #{chunk.sourceType},
+                #{chunk.sourceUrl,jdbcType=VARCHAR}, #{chunk.title,jdbcType=VARCHAR},
+                #{chunk.sourceOrg,jdbcType=VARCHAR},
+                #{chunk.publishedAt,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+                #{chunk.degree,jdbcType=VARCHAR}, #{chunk.college,jdbcType=VARCHAR},
+                #{chunk.campus,jdbcType=VARCHAR}, #{chunk.gradeRange,jdbcType=VARCHAR},
+                CAST(#{chunk.metaJson} AS jsonb)
+            )
+        </foreach>
+        RETURNING <include refid="baseColumns"/>
+    </select>
+
+</mapper>

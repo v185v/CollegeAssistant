@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!DOCTYPE mapper
+        PUBLIC "-//mybatis.org//DTD Mapper 3.0//EN"
+        "https://mybatis.org/dtd/mybatis-3-mapper.dtd">
+<mapper namespace="xyz.v185v.collegeassistant.ingestion.persistence.IngestRunMapper">
+
+    <resultMap id="runMap"
+               type="xyz.v185v.collegeassistant.ingestion.persistence.IngestRunDO">
+        <id property="id" column="id"/>
+        <result property="sourceId" column="source_id"/>
+        <result property="startedAt" column="started_at"/>
+        <result property="finishedAt" column="finished_at"/>
+        <result property="added" column="added"/>
+        <result property="updated" column="updated"/>
+        <result property="skipped" column="skipped"/>
+        <result property="failed" column="failed"/>
+        <result property="status" column="status"/>
+        <result property="errorDetail" column="error_detail"/>
+        <result property="reason" column="reason"/>
+        <result property="heartbeatAt" column="heartbeat_at"/>
+        <result property="triggerType" column="trigger_type"/>
+        <result property="scheduledAt" column="scheduled_at"/>
+        <result property="discovered" column="discovered"/>
+        <result property="attempt" column="attempt"/>
+        <result property="workerId" column="worker_id"/>
+        <result property="leaseToken" column="lease_token"
+                typeHandler="org.apache.ibatis.type.ObjectTypeHandler"/>
+        <result property="claimedAt" column="claimed_at"/>
+        <result property="errorCode" column="error_code"/>
+    </resultMap>
+
+    <sql id="summaryColumns">
+        id, source_id, status, added, updated, skipped, failed,
+        error_detail, started_at, finished_at
+    </sql>
+
+    <sql id="leaseColumns">
+        id, attempt, worker_id, lease_token
+    </sql>
+
+    <select id="startReturning" resultMap="runMap" affectData="true" flushCache="true">
+        INSERT INTO ingest_run (
+            source_id, status, reason, trigger_type, attempt,
+            worker_id, lease_token, claimed_at, heartbeat_at
+        )
+        VALUES (
+            #{sourceId}, 'RUNNING', #{reason,jdbcType=VARCHAR}, 'MANUAL', 0,
+            #{workerId}, CAST(#{leaseToken,jdbcType=OTHER} AS uuid), now(), now()
+        )
+        ON CONFLICT (source_id)
+            WHERE status IN ('RUNNING', 'DEFERRED')
+        DO NOTHING
+        RETURNING <include refid="summaryColumns"/>
+    </select>
+
+    <select id="startLeaseReturning" resultMap="runMap" affectData="true" flushCache="true">
+        INSERT INTO ingest_run (
+            source_id, status, reason, trigger_type, attempt,
+            scheduled_at, worker_id, lease_token, claimed_at, heartbeat_at
+        )
+        VALUES (
+            #{sourceId}, 'RUNNING', #{reason,jdbcType=VARCHAR}, #{triggerType}, 0,
+            #{scheduledAt,jdbcType=TIMESTAMP_WITH_TIMEZONE}, #{workerId},
+            CAST(#{leaseToken,jdbcType=OTHER} AS uuid), now(), now()
+        )
+        ON CONFLICT (source_id)
+            WHERE status IN ('RUNNING', 'DEFERRED')
+        DO NOTHING
+        RETURNING <include refid="leaseColumns"/>
+    </select>
+
+    <select id="findRetryCandidateForUpdate" resultMap="runMap">
+        SELECT id, source_id, reason, attempt, trigger_type
+        FROM ingest_run
+        WHERE id = #{runId}
+          AND status IN ('FAILED', 'PARTIAL_SUCCESS')
+        FOR UPDATE
+    </select>
+
+    <select id="retryFailedReturning" resultMap="runMap" affectData="true" flushCache="true">
+        INSERT INTO ingest_run (
+            source_id, status, reason, trigger_type, attempt,
+            worker_id, lease_token, claimed_at, heartbeat_at
+        )
+        VALUES (
+            #{sourceId}, 'RUNNING', #{reason,jdbcType=VARCHAR}, 'RETRY', #{attempt},
+            #{workerId}, CAST(#{leaseToken,jdbcType=OTHER} AS uuid), now(), now()
+        )
+        ON CONFLICT (source_id)
+            WHERE status IN ('RUNNING', 'DEFERRED')
+        DO NOTHING
+        RETURNING <include refid="leaseColumns"/>
+    </select>
+
+    <select id="retryFailedImportReturning" resultMap="runMap"
+            affectData="true" flushCache="true">
+        INSERT INTO ingest_run (
+            source_id, status, reason, trigger_type, attempt,
+            worker_id, lease_token, claimed_at, heartbeat_at
+        )
+        VALUES (
+            #{sourceId}, 'RUNNING', #{reason,jdbcType=VARCHAR}, 'IMPORT', #{attempt},
+            #{workerId}, CAST(#{leaseToken,jdbcType=OTHER} AS uuid), now(), now()
+        )
+        ON CONFLICT (source_id)
+            WHERE status IN ('RUNNING', 'DEFERRED')
+        DO NOTHING
+        RETURNING <include refid="leaseColumns"/>
+    </select>
+
+    <insert id="copyFailedItems">
+        INSERT INTO ingest_run_item (
+            run_id, item_key, item_kind, status, document_id,
+            retry_count, next_attempt_at, checkpoint, checkpoint_attempt
+        )
+        SELECT #{newRunId}, item_key, item_kind, 'QUEUED', document_id,
+               retry_count + 1, NULL, checkpoint, 0
+        FROM ingest_run_item
+        WHERE run_id = #{failedRunId}
+          AND status = 'FAILED'
+    </insert>
+
+    <update id="heartbeatLegacy">
+        UPDATE ingest_run
+        SET heartbeat_at = now()
+        WHERE id = #{runId}
+          AND status = 'RUNNING'
+    </update>
+
+    <update id="heartbeatLease">
+        UPDATE ingest_run
+        SET heartbeat_at = now()
+        WHERE id = #{runId}
+          AND status = 'RUNNING'
+          AND attempt = #{attempt}
+          AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+    </update>
+
+    <select id="deferLegacyReturning" resultMap="runMap"
+            affectData="true" flushCache="true">
+        UPDATE ingest_run
+        SET status = 'DEFERRED',
+            worker_id = NULL,
+            lease_token = NULL,
+            error_code = 'HTTP_429',
+            error_detail = 'Remote source requested a deferred retry',
+            heartbeat_at = now()
+        WHERE id = #{runId}
+          AND status = 'RUNNING'
+        RETURNING <include refid="summaryColumns"/>
+    </select>
+
+    <update id="deferLease">
+        UPDATE ingest_run
+        SET status = 'DEFERRED',
+            worker_id = NULL,
+            lease_token = NULL,
+            error_code = 'HTTP_429',
+            error_detail = 'Remote source requested a deferred retry',
+            heartbeat_at = now()
+        WHERE id = #{runId}
+          AND status = 'RUNNING'
+          AND attempt = #{attempt}
+          AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+    </update>
+
+    <select id="findDueDeferredForUpdate" resultMap="runMap">
+        SELECT run.id, run.source_id
+        FROM ingest_run run
+        WHERE run.status = 'DEFERRED'
+          AND EXISTS (
+              SELECT 1
+              FROM ingest_run_item item
+              WHERE item.run_id = run.id
+                AND item.status = 'FAILED'
+                AND item.next_attempt_at &lt;= #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+          )
+        ORDER BY run.heartbeat_at ASC, run.id ASC
+        FOR UPDATE SKIP LOCKED
+        LIMIT #{batchSize}
+    </select>
+
+    <select id="claimDeferredReturning" resultMap="runMap"
+            affectData="true" flushCache="true">
+        UPDATE ingest_run
+        SET status = 'RUNNING',
+            attempt = attempt + 1,
+            worker_id = #{workerId},
+            lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid),
+            claimed_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            heartbeat_at = #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE},
+            error_code = NULL,
+            error_detail = NULL
+        WHERE id = #{runId}
+          AND status = 'DEFERRED'
+        RETURNING <include refid="leaseColumns"/>
+    </select>
+
+    <update id="resetDueItems">
+        UPDATE ingest_run_item
+        SET status = 'QUEUED',
+            next_attempt_at = NULL,
+            error_code = NULL,
+            error_summary = NULL,
+            updated_at = now()
+        WHERE run_id = #{runId}
+          AND status = 'FAILED'
+          AND next_attempt_at &lt;= #{now,jdbcType=TIMESTAMP_WITH_TIMEZONE}
+    </update>
+
+    <select id="finishLegacyReturning" resultMap="runMap"
+            affectData="true" flushCache="true">
+        UPDATE ingest_run
+        SET status = #{status},
+            added = #{added},
+            updated = #{updated},
+            skipped = #{skipped},
+            failed = #{failed},
+            error_detail = #{errorDetail,jdbcType=VARCHAR},
+            finished_at = now()
+        WHERE id = #{runId}
+          AND status = 'RUNNING'
+        RETURNING <include refid="summaryColumns"/>
+    </select>
+
+    <update id="finishLease">
+        UPDATE ingest_run
+        SET status = #{status},
+            added = #{added},
+            updated = #{updated},
+            skipped = #{skipped},
+            failed = #{failed},
+            error_code = #{errorCode,jdbcType=VARCHAR},
+            error_detail = #{errorDetail,jdbcType=VARCHAR},
+            finished_at = now()
+        WHERE id = #{runId}
+          AND status = 'RUNNING'
+          AND attempt = #{attempt}
+          AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+    </update>
+
+    <select id="expireStaleReturning" resultMap="runMap"
+            affectData="true" flushCache="true">
+        UPDATE ingest_run
+        SET status = 'FAILED',
+            worker_id = NULL,
+            lease_token = NULL,
+            finished_at = now(),
+            error_code = 'LEASE_EXPIRED',
+            error_detail = 'lease expired'
+        WHERE status = 'RUNNING'
+          AND heartbeat_at &lt; now() - CAST(#{timeout,jdbcType=VARCHAR} AS interval)
+        RETURNING <include refid="summaryColumns"/>
+    </select>
+
+    <select id="expireStaleForSourceReturning" resultMap="runMap"
+            affectData="true" flushCache="true">
+        UPDATE ingest_run
+        SET status = 'FAILED',
+            worker_id = NULL,
+            lease_token = NULL,
+            finished_at = now(),
+            error_code = 'LEASE_EXPIRED',
+            error_detail = 'lease expired'
+        WHERE status = 'RUNNING'
+          AND source_id = #{sourceId}
+          AND heartbeat_at &lt; now() - CAST(#{timeout,jdbcType=VARCHAR} AS interval)
+        RETURNING <include refid="summaryColumns"/>
+    </select>
+
+    <select id="lockAndAssertActive" resultType="long">
+        SELECT id
+        FROM ingest_run
+        WHERE id = #{runId}
+          AND status = 'RUNNING'
+          AND attempt = #{attempt}
+          AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+        FOR UPDATE
+    </select>
+
+    <select id="isActive" resultType="boolean">
+        SELECT EXISTS (
+            SELECT 1
+            FROM ingest_run
+            WHERE id = #{runId}
+              AND status = 'RUNNING'
+              AND attempt = #{attempt}
+              AND lease_token = CAST(#{leaseToken,jdbcType=OTHER} AS uuid)
+        )
+    </select>
+</mapper>
