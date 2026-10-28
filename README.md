@@ -83,11 +83,24 @@ PostgreSQL 集成测试使用 `postgres-it` Maven profile，需要设置 `TEST_D
 
 仓库保留源码、测试、数据库迁移、公共配置、依赖锁文件、运行脚本及本说明。内部文档、Agent/IDE 配置、CI 目录、临时工作区、依赖、构建产物、运行数据、备份和私密配置通过 `.gitignore` 排除，本地文件保留。
 
-干净发布分支为 `codex/github-clean`。发布时仅推送此分支，例如将它推送为远程 `main`：
+GitHub 仓库：[v185v/CollegeAssistant](https://github.com/v185v/CollegeAssistant)，远程 `origin` 地址为 `https://github.com/v185v/CollegeAssistant.git`。
+
+干净发布分支为 `codex/github-clean`，对应远程 `main`。当前本地已配置 `origin`；新克隆或迁移的工作区若尚未配置，可先添加：
 
 ```powershell
-git remote add origin https://github.com/<your-account>/<your-repository>.git
+git remote add origin https://github.com/v185v/CollegeAssistant.git
+```
+
+首次发布时执行：
+
+```powershell
 git push -u origin codex/github-clean:main
 ```
 
 原 `main` 和其他旧分支保留本地历史。不要使用 `git push --all` 或 `git push --mirror` 上传这些分支。
+
+## 后续开发与提交
+
+后续小改动提交到本地 `codex/github-clean`；独立功能或修复从它创建新的 `codex/` 分支，验证后再合入。旧的本地 `main` 仅作历史备份。`git commit` 只保存到本地，更新 GitHub 时显式执行 `git push origin codex/github-clean:main`。
+
+本地和远程统一遵守 [开发、提交与推送规范](CONTRIBUTING.md)，包括文件范围、敏感信息处理、提交信息格式、验证要求及完整操作流程。编码助手同时读取根目录 [AGENTS.md](AGENTS.md)。
